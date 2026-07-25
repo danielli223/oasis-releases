@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.sparkle-project.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Oasis</title>
+    <description>Updates for the Oasis macOS app.</description>
+    <language>en</language>
+  </channel>
+</rss>
