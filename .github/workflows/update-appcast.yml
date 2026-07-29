@@ -1,0 +1,122 @@
+# Publish the macOS app's update feed.
+#
+# Until this existed, appcast.xml was an empty stub and nothing wrote to it, so
+# anyone who installed the native app was stranded on the version they
+# installed — it checked the feed every four hours and always found nothing.
+# (danielli223/oasis-focus issue #53.)
+#
+# What fires this: a release actually being PUBLISHED. The `released` event does
+# not fire for drafts, and a draft's assets are filtered out again inside the
+# collection step below, so a staged release that nobody has clicked Publish on
+# can never reach users' update feed. Publishing remains the only rollout gate.
+#
+# What it does: rebuilds appcast.xml from the `Oasis-appcast-item.xml` asset on
+# every published release that carries one. Those assets are produced and
+# EdDSA-signed by the release pipeline in danielli223/oasis-focus, which is the
+# only place the update-signing private key exists. Nothing here signs
+# anything, so a leak of this public repository's secrets cannot forge an
+# update.
+#
+# Rebuilt from scratch, never appended to — so re-running is always safe, and
+# pulling a bad release needs no XML editing:
+#
+#   1. Delete the bad release, or just its Oasis-appcast-item.xml asset if you
+#      want to keep the release page but stop offering the update.
+#   2. Re-run this workflow from the Actions tab. The entry disappears.
+#
+# Anyone who already installed the bad version is NOT rolled back — reaching
+# them needs a release with a higher build number, never a re-used one.
+#
+# Older Electron releases (0.6.0 and below) carry no such asset and are simply
+# skipped: they used an entirely different update mechanism.
+
+name: Update the app's update feed
+
+on:
+  release:
+    types: [released]
+  # Manual runs are the rollback path, and the way to repair the feed if a run
+  # fails midway.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Two releases published close together must not race to write the same file.
+# Never cancels in progress: a half-finished feed is worse than a slow one.
+concurrency:
+  group: appcast
+  cancel-in-progress: false
+
+jobs:
+  publish-feed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test the feed builder before letting it near the published feed
+        # This repository has no separate CI, and this script writes the file
+        # every installed app polls. Running its suite here is what stops a
+        # broken edit from silently switching off updates for everyone.
+        run: bash build-appcast-test.sh
+
+      - name: Collect the update-feed fragment from every published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p items
+
+          # --limit is explicit because gh defaults to 30 and would silently
+          # ignore older releases once there are more than that — which would
+          # drop working entries out of the feed with no error.
+          LIMIT=200
+          gh release list --limit "$LIMIT" \
+            --json tagName,isDraft,isPrerelease \
+            --jq '.[] | select(.isDraft == false and .isPrerelease == false) | .tagName' \
+            > published-tags.txt
+
+          TAG_COUNT="$(wc -l < published-tags.txt | tr -d ' ')"
+          echo "Found $TAG_COUNT published releases."
+          if [ "$TAG_COUNT" -ge "$LIMIT" ]; then
+            echo "::error::Hit the $LIMIT-release listing limit, so older releases were not considered and would be dropped from the feed. Raise LIMIT."
+            exit 1
+          fi
+
+          FOUND=0
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            if gh release download "$tag" \
+                 --pattern 'Oasis-appcast-item.xml' \
+                 --output "items/$tag.xml" 2>/dev/null; then
+              echo "  $tag: update-feed fragment collected"
+              FOUND=$((FOUND + 1))
+            else
+              # Expected for the Electron-era releases, which predate the
+              # native app's updater entirely.
+              echo "  $tag: no update-feed fragment, skipping"
+            fi
+          done < published-tags.txt
+
+          echo "Collected $FOUND fragments."
+
+      - name: Rebuild appcast.xml
+        run: bash build-appcast.sh --items-dir items --out appcast.xml
+
+      - name: Commit the feed if it changed
+        run: |
+          set -euo pipefail
+          rm -rf items published-tags.txt
+          if git diff --quiet -- appcast.xml; then
+            echo "The feed already matches what is published — nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add appcast.xml
+          git commit -m "Update the app's update feed for ${{ github.event.release.tag_name || 'a manual run' }}"
+          git push
+
+      - name: Show what users will now see
+        run: cat appcast.xml
