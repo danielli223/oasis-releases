@@ -146,7 +146,35 @@ expect_fail "refuses a fragment that is not parseable XML" \
 
 TWO_ITEMS="$WORK/twoitems"
 mkdir -p "$TWO_ITEMS"
-{ write_fragment /dev/stdout "1.0.1" "2"; write_fragment /dev/stdout "1.0.2" "3"; } > "$TWO_ITEMS/a.xml"
+# Concatenate two staged files rather than pointing write_fragment at
+# /dev/stdout twice. That older form was not portable, and it failed in the
+# direction that hides itself:
+#
+#   macOS  -- /dev/fd/1 hands back a dup of the descriptor already open on the
+#             redirect target, so the second write continues after the first and
+#             the fixture really does hold two entries.
+#   Linux  -- /dev/stdout resolves to the target file's own path, so `>` re-opens
+#             it with O_TRUNC. The second write erases the first, the fixture
+#             collapses to ONE entry, and build-appcast.sh correctly accepts it.
+#
+# So on CI this case reported a failure that said "the builder does not reject
+# two entries" when the truth was "the test never handed it two entries" -- and
+# the stray output file that success left behind then failed the final case too.
+# Staged outside $TWO_ITEMS so the halves are not themselves globbed as fragments.
+write_fragment "$WORK/two-entry-a.frag" "1.0.1" "2"
+write_fragment "$WORK/two-entry-b.frag" "1.0.2" "3"
+cat "$WORK/two-entry-a.frag" "$WORK/two-entry-b.frag" > "$TWO_ITEMS/a.xml"
+
+# Assert the fixture before asserting on the behaviour it is meant to provoke.
+# A fixture that quietly turns into something else is indistinguishable from the
+# code under test changing, and costs far more to diagnose from the failure text.
+TWO_ITEM_COUNT="$(grep -c "<item>" "$TWO_ITEMS/a.xml" || true)"
+if [ "$TWO_ITEM_COUNT" -eq 2 ]; then
+  pass "the two-entry fixture really holds two entries"
+else
+  fail "the two-entry fixture holds $TWO_ITEM_COUNT entries, not 2 — the case below proves nothing"
+fi
+
 expect_fail "refuses a fragment holding more than one entry" \
   "$SCRIPT" --items-dir "$TWO_ITEMS" --out "$WORK/bad.xml"
 
