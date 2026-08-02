@@ -5,6 +5,18 @@
     <description>Updates for the Oasis macOS app.</description>
     <language>en</language>
     <item>
+      <title>Oasis 1.0.2</title>
+      <pubDate>Sun, 02 Aug 2026 04:03:04 +0000</pubDate>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
+      <enclosure url="https://github.com/danielli223/oasis-releases/releases/download/v1.0.2/Oasis-1.0.2.zip"
+                 sparkle:version="3"
+                 sparkle:shortVersionString="1.0.2"
+                 sparkle:installationType="package"
+                 length="3804492"
+                 type="application/octet-stream"
+                 sparkle:edSignature="1KRwk/9mKZjfCMH1Vvz2F5dsLILs7lgFOD45Zkbr/fGk8Rfc/E7JgI3GhVa4o5nL1cUuqNA6i6Dit8MyTgXCDQ=="/>
+    </item>
+    <item>
       <title>Oasis 1.0.1</title>
       <pubDate>Thu, 30 Jul 2026 22:05:26 +0000</pubDate>
       <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
