@@ -53,7 +53,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # `ref` is load-bearing. On a `release` event the default checkout lands
+      # on the release TAG, which is a detached HEAD, and the bare `git push`
+      # at the end of this job then fails with:
+      #
+      #   fatal: You are not currently on a branch.
+      #
+      # So EVERY automatic run built the correct feed, committed it, and threw
+      # it away. Only manual runs ever worked, because those check out a
+      # branch — which is why re-running this by hand has repeatedly "fixed"
+      # the feed while the fault stayed put (2026-07-30 and again 2026-08-02).
+      #
+      # The damage is invisible from the product side: a stale feed makes every
+      # installed app conclude it is already up to date. Nobody sees an error;
+      # they just never get the update. See oasis-focus#65.
       - uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Test the feed builder before letting it near the published feed
         # This repository has no separate CI, and this script writes the file
@@ -103,6 +119,32 @@ jobs:
 
       - name: Rebuild appcast.xml
         run: bash build-appcast.sh --items-dir items --out appcast.xml
+
+      # A release carrying no update-feed fragment is skipped above with a log
+      # line and no error. That is correct for the Electron-era releases, which
+      # never had one — but when THIS run was triggered by publishing a release,
+      # that same silence means the release just published will reach nobody,
+      # and the job still goes green.
+      #
+      # That is exactly what happened to v1.0.0: it was built before the
+      # pipeline produced a fragment at all, so the feed had nothing to build
+      # from, every installed app was told it was up to date, and it went
+      # unnoticed for a whole release cycle (oasis-focus#65).
+      #
+      # Manual runs skip this check: they are the repair path and may legitimately
+      # run when the newest release predates fragments entirely.
+      - name: Fail if the release that triggered this run is not in the feed
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          if grep -q "download/${TAG}/" appcast.xml; then
+            echo "ok: ${TAG} is in the feed and will be offered to installed apps."
+            exit 0
+          fi
+          echo "::error::${TAG} was published but produced no entry in appcast.xml, so no installed app will ever be offered it. The release is almost certainly missing its Oasis-appcast-item.xml asset — check the release build's 'Wrap and sign the update archive' step. Publishing succeeded, so nothing else will report this."
+          exit 1
 
       - name: Commit the feed if it changed
         run: |
